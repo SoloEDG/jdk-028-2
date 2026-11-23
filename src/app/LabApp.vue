@@ -1,21 +1,42 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { CatalogPanel } from "@/features/catalog";
 import { CircuitBoard } from "@/features/circuit";
 import { InputRack, SignalMonitor } from "@/features/simulation";
 import { ChallengePanel } from "@/features/challenge";
 import { WorkspaceBar } from "@/features/workspace";
+import { ScopePanel } from "@/features/scope";
 import { useLab } from "./useLab";
+
+type LabMode = "combinational" | "scope";
 const lab = useLab();
 const { document, notice } = lab;
+const mode = ref<LabMode>("combinational");
 const { tool } = lab.placement,
   { selected, pending } = lab.circuit,
   { signals } = lab.simulation;
 const { target, table, passed, inspected, hint } = lab.challenge;
 const { status } = lab.workspace;
+
 const selectedNode = computed(() =>
   document.value.nodes.find((node) => node.id === selected.value),
 );
+
+/** 示波器模式下，工作台显示运行版本在当前时刻已传播到位的信号 */
+const boardSignals = computed(() => {
+  const active = lab.scope.run.value;
+  if (mode.value !== "scope" || !active) return signals.value;
+  return lab.scope.boardSignals(active, active.currentTime.value);
+});
+const boardDocument = computed(
+  () => lab.scope.run.value?.snapshot.document ?? document.value,
+);
+
+function setMode(next: LabMode) {
+  if (next === mode.value) return;
+  if (next === "combinational") lab.scope.pause();
+  mode.value = next;
+}
 function keydown(event: KeyboardEvent) {
   if ((event.target as HTMLElement).closest("input,textarea,select")) return;
   if (event.key === "Escape") lab.cancel();
@@ -38,7 +59,10 @@ onUnmounted(() => window.removeEventListener("keydown", keydown));
         </div>
       </div>
       <div class="instrument-label">
-        <span class="power-light" />组合逻辑模式 <small>BENCH / JDK–028</small>
+        <span class="power-light" />{{
+          mode === "scope" ? "时序示波器模式" : "组合逻辑模式"
+        }}
+        <small>BENCH / JDK–028</small>
       </div>
     </header>
     <WorkspaceBar
@@ -52,8 +76,23 @@ onUnmounted(() => window.removeEventListener("keydown", keydown));
       @import="lab.workspace.importText"
       @error="lab.notify({ tone: 'error', message: $event })"
     />
+    <div class="mode-tabs">
+      <button
+        :class="{ active: mode === 'combinational' }"
+        @click="setMode('combinational')"
+      >
+        组合逻辑工作台
+      </button>
+      <button
+        :class="{ active: mode === 'scope' }"
+        @click="setMode('scope')"
+      >
+        时序示波器
+      </button>
+    </div>
     <main class="workbench">
       <CatalogPanel
+        v-if="mode === 'combinational'"
         :tool="tool"
         @choose="
           tool = $event;
@@ -62,7 +101,11 @@ onUnmounted(() => window.removeEventListener("keydown", keydown));
       />
       <section class="center-workspace">
         <div class="board-toolbar">
-          <span><b>工作台</b><small>单比特 · 即时传播</small></span>
+          <span><b>工作台</b
+            ><small>{{
+              mode === "scope" ? "时序传播 · 仅显示已到达的电平" : "单比特 · 即时传播"
+            }}</small></span
+          >
           <div>
             <button
               :disabled="!selected"
@@ -80,8 +123,8 @@ onUnmounted(() => window.removeEventListener("keydown", keydown));
           }}<button @click="lab.cancel">取消</button>
         </div>
         <CircuitBoard
-          :document="document"
-          :signals="signals"
+          :document="boardDocument"
+          :signals="boardSignals"
           :selected="selected"
           :pending="pending"
           :tool="tool"
@@ -113,7 +156,7 @@ onUnmounted(() => window.removeEventListener("keydown", keydown));
           }}</span
           ><span class="grid-label">GRID 20</span>
         </div>
-        <div class="instruments">
+        <div class="instruments" v-if="mode === 'combinational'">
           <InputRack
             :nodes="document.nodes"
             :signals="signals"
@@ -124,8 +167,16 @@ onUnmounted(() => window.removeEventListener("keydown", keydown));
             :selected="selected"
           />
         </div>
+        <ScopePanel
+          v-else
+          :document="document"
+          :scope="lab.scope"
+          :selected-id="selected"
+          @notice="lab.notify"
+        />
       </section>
       <ChallengePanel
+        v-if="mode === 'combinational'"
         :document="document"
         :target="target"
         :table="table"
@@ -140,7 +191,11 @@ onUnmounted(() => window.removeEventListener("keydown", keydown));
     <footer class="status-bar" :class="notice.tone" role="status">
       <span
         >{{
-          notice.tone === "error" ? "!" : notice.tone === "success" ? "✓" : "●"
+          notice.tone === "error"
+            ? "!"
+            : notice.tone === "success"
+              ? "✓"
+              : "●"
         }}
         {{ notice.message }}</span
       ><small>LOCAL LAB / 纯前端实验</small>
